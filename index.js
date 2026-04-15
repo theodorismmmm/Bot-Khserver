@@ -22,7 +22,7 @@ const client = new Client({
 const ADMIN_CHANNEL_ID = process.env.ADMIN_CHANNEL_ID;
 const PAYPAL_LINK = 'https://www.paypal.me/transfer959';
 
-client.once('clientReady', () => {
+client.once('ready', () => {
     console.log(`✅ Logged in as ${client.user.tag}`);
 });
 
@@ -31,7 +31,7 @@ client.on('channelCreate', async (channel) => {
     if (!channel.name.startsWith('ticket-')) return;
 
     try {
-        // Wait 3 seconds for Ticket Tool to add the user to the channel
+        // Wait 1.5 seconds for Ticket Tool to add the user to the channel
         setTimeout(async () => {
             const members = channel.members.filter(m => !m.user.bot);
             const user = members.first();
@@ -42,7 +42,7 @@ client.on('channelCreate', async (channel) => {
                 // 2. Send the Main Menu
                 await sendMainMenu(channel, user);
             }
-        }, 3000);
+        }, 1500);
     } catch (err) {
         console.error("Error setting up ticket:", err);
     }
@@ -90,9 +90,11 @@ client.on('interactionCreate', async interaction => {
         }
 
         if (action === 'trial' && type === 'accept') {
-            await interaction.reply({ content: '**Thank you!** Here is your Trial Link: `https://your-trial-link.com`\n*Returning to main menu...*', ephemeral: true });
-            await sendMainMenu(interaction.channel, interaction.user);
-            await interaction.message.delete();
+            await interaction.update({ content: '**Thank you!** Here is your Trial Link: `https://your-trial-link.com`', embeds: [], components: [] });
+            setTimeout(async () => {
+                await interaction.message.delete().catch(() => {});
+                await sendMainMenu(interaction.channel, interaction.user);
+            }, 3000);
         }
 
         if (action === 'trial' && type === 'decline') {
@@ -101,6 +103,7 @@ client.on('interactionCreate', async interaction => {
         }
 
         if (action === 'trial' && type === 'back') {
+            await interaction.deferUpdate();
             await interaction.message.delete();
             await sendMainMenu(interaction.channel, interaction.user);
         }
@@ -121,6 +124,7 @@ client.on('interactionCreate', async interaction => {
         }
 
         if (action === 'pro' && type === 'decline') {
+            await interaction.deferUpdate();
             await interaction.message.delete();
             await sendMainMenu(interaction.channel, interaction.user);
         }
