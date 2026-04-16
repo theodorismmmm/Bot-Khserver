@@ -77,7 +77,7 @@ async function sendMainMenu(channel, user) {
         .setColor('#7850ff');
 
     const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`menu_trial_${user.id}`).setLabel('Trial Version').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`menu_trial_${user.id}`).setLabel('Trial Version').setStyle(ButtonStyle.Secondary).setDisabled(true),
         new ButtonBuilder().setCustomId(`menu_pro_${user.id}`).setLabel('Buy Pro').setStyle(ButtonStyle.Primary)
     );
 
