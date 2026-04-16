@@ -20,6 +20,7 @@ jobs:
         run: |
           url="https://bot-khserver.onrender.com/"
           max_attempts=5
+          # 12s gives Render a short warm-up window while keeping total runtime < 4 minutes.
           delay_seconds=12
           success=0
 
