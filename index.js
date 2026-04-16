@@ -29,7 +29,7 @@ client.once('ready', () => {
 
 async function registerPaySlashCommand() {
     try {
-        for (const guild of client.guilds.cache.values()) {
+        await Promise.all([...client.guilds.cache.values()].map(async (guild) => {
             const commands = await guild.commands.fetch();
             const existing = commands.find(cmd => cmd.name === 'pay');
 
@@ -40,7 +40,7 @@ async function registerPaySlashCommand() {
                 });
                 console.log(`Registered /pay in ${guild.name}`);
             }
-        }
+        }));
     } catch (err) {
         console.error('Failed to register /pay command:', err);
     }
@@ -102,10 +102,11 @@ client.on('interactionCreate', async interaction => {
             });
         } catch (err) {
             console.error('Error handling /pay:', err);
+            const errorResponse = { content: 'Failed to restart the bot flow.', ephemeral: true };
             if (interaction.deferred || interaction.replied) {
-                await interaction.followUp({ content: 'Failed to restart the bot flow.', ephemeral: true }).catch(() => {});
+                await interaction.followUp(errorResponse).catch(() => {});
             } else {
-                await interaction.reply({ content: 'Failed to restart the bot flow.', ephemeral: true }).catch(() => {});
+                await interaction.reply(errorResponse).catch(() => {});
             }
         }
         return;
