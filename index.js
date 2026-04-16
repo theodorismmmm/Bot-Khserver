@@ -170,7 +170,7 @@ client.on('interactionCreate', async interaction => {
         if (action === 'menu' && type === 'pro') {
             const embed = new EmbedBuilder()
                 .setTitle('📜 Payment Terms of Service')
-                .setDescription('Before purchasing KaHack Pro, you must agree:\n1. All sales are final. No refunds.\n2. We are not responsible for any actions taken against your Kahoot account.\n3. The license is valid for 120 Days.')
+                .setDescription('Before purchasing KaHack Pro, you must agree:\n1. All sales are final. No refunds.\n2. We are not responsible for any actions taken against your Kahoot account.\n3. Pro access is permanent.')
                 .setColor('#ff3366');
 
             const row = new ActionRowBuilder().addComponents(
@@ -221,7 +221,7 @@ client.on('interactionCreate', async interaction => {
         // Already Paid Button
         if (action === 'pay' && type === 'done') {
             await interaction.channel.permissionOverwrites.edit(interaction.user.id, { SendMessages: true });
-            await interaction.update({ content: `✅ **Payment Noted!** <@${interaction.user.id}> The chat has been unlocked.\n\nYou will receive the shortcut and license key within 3 Hours. You can leave any questions or payment proof screenshots below.`, embeds: [], components: [] });
+            await interaction.update({ content: `✅ **Payment Noted!** <@${interaction.user.id}> The chat has been unlocked.\n\nYou will receive the shortcut within 3 Hours with permanent access. You can leave any questions or payment proof screenshots below.`, embeds: [], components: [] });
         }
     }
 
@@ -241,7 +241,7 @@ client.on('interactionCreate', async interaction => {
             // Unlock chat for user
             await interaction.channel.permissionOverwrites.edit(interaction.user.id, { SendMessages: true });
 
-            await interaction.reply({ content: `✅ **Code Submitted!** <@${interaction.user.id}> The chat has been unlocked.\n\nYou will receive the shortcut and license key within 3 Hours. You can leave any questions below.` });
+            await interaction.reply({ content: `✅ **Code Submitted!** <@${interaction.user.id}> The chat has been unlocked.\n\nYou will receive the shortcut within 3 Hours with permanent access. You can leave any questions below.` });
             await interaction.message.delete();
         }
     }
