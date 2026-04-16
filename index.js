@@ -21,14 +21,35 @@ const client = new Client({
 // Settings
 const ADMIN_CHANNEL_ID = process.env.ADMIN_CHANNEL_ID;
 const PAYPAL_LINK = 'https://www.paypal.me/transfer959';
+const TICKET_CHANNEL_PREFIX = 'ticket-';
 
 client.once('ready', () => {
     console.log(`✅ Logged in as ${client.user.tag}`);
+    registerPaySlashCommand();
 });
+
+async function registerPaySlashCommand() {
+    try {
+        for (const guild of client.guilds.cache.values()) {
+            const commands = await guild.commands.fetch();
+            const existing = commands.find(cmd => cmd.name === 'pay');
+
+            if (!existing) {
+                await guild.commands.create({
+                    name: 'pay',
+                    description: 'Restart the payment bot flow in this ticket'
+                });
+                console.log(`Registered /pay in ${guild.name}`);
+            }
+        }
+    } catch (err) {
+        console.error('Failed to register /pay command:', err);
+    }
+}
 
 // Auto-trigger when Ticket Tool creates a new channel
 client.on('channelCreate', async (channel) => {
-    if (!channel.name.startsWith('ticket-')) return;
+    if (!channel.name.startsWith(TICKET_CHANNEL_PREFIX)) return;
 
     try {
         // Wait 1.5 seconds for Ticket Tool to add the user to the channel
@@ -65,6 +86,43 @@ async function sendMainMenu(channel, user) {
 
 // Handle all button clicks and forms
 client.on('interactionCreate', async interaction => {
+    if (interaction.isChatInputCommand() && interaction.commandName === 'pay') {
+        if (!interaction.channel || !interaction.channel.name.startsWith(TICKET_CHANNEL_PREFIX)) {
+            return interaction.reply({
+                content: 'Use this command inside a ticket channel.',
+                ephemeral: true
+            });
+        }
+
+        try {
+            await interaction.channel.permissionOverwrites.edit(interaction.user.id, { SendMessages: false });
+            await sendMainMenu(interaction.channel, interaction.user);
+            await interaction.reply({
+                content: '✅ Bot flow restarted in this ticket.',
+                ephemeral: true
+            });
+        } catch (err) {
+            console.error('Error handling /pay:', err);
+            const errorResponse = { content: 'Failed to restart the bot flow.', ephemeral: true };
+            if (interaction.deferred || interaction.replied) {
+                await interaction.followUp(errorResponse).catch((followUpErr) => {
+                    console.error('Failed to send /pay follow-up error response:', {
+                        originalError: err,
+                        followUpError: followUpErr
+                    });
+                });
+            } else {
+                await interaction.reply(errorResponse).catch((replyErr) => {
+                    console.error('Failed to send /pay error response:', {
+                        originalError: err,
+                        replyError: replyErr
+                    });
+                });
+            }
+        }
+        return;
+    }
+
     if (interaction.isButton()) {
         const [action, type, userId] = interaction.customId.split('_');
 
