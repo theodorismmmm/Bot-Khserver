@@ -24,7 +24,27 @@ const PAYPAL_LINK = 'https://www.paypal.me/transfer959';
 
 client.once('ready', () => {
     console.log(`✅ Logged in as ${client.user.tag}`);
+    registerPaySlashCommand();
 });
+
+async function registerPaySlashCommand() {
+    try {
+        for (const guild of client.guilds.cache.values()) {
+            const commands = await guild.commands.fetch();
+            const existing = commands.find(cmd => cmd.name === 'pay');
+
+            if (!existing) {
+                await guild.commands.create({
+                    name: 'pay',
+                    description: 'Restart the payment bot flow in this ticket'
+                });
+                console.log(`Registered /pay in ${guild.name}`);
+            }
+        }
+    } catch (err) {
+        console.error('Failed to register /pay command:', err);
+    }
+}
 
 // Auto-trigger when Ticket Tool creates a new channel
 client.on('channelCreate', async (channel) => {
@@ -65,6 +85,32 @@ async function sendMainMenu(channel, user) {
 
 // Handle all button clicks and forms
 client.on('interactionCreate', async interaction => {
+    if (interaction.isChatInputCommand() && interaction.commandName === 'pay') {
+        if (!interaction.channel || !interaction.channel.name.startsWith('ticket-')) {
+            return interaction.reply({
+                content: 'Use this command inside a ticket channel.',
+                ephemeral: true
+            });
+        }
+
+        try {
+            await interaction.channel.permissionOverwrites.edit(interaction.user.id, { SendMessages: false });
+            await sendMainMenu(interaction.channel, interaction.user);
+            await interaction.reply({
+                content: '✅ Bot flow restarted in this ticket.',
+                ephemeral: true
+            });
+        } catch (err) {
+            console.error('Error handling /pay:', err);
+            if (interaction.deferred || interaction.replied) {
+                await interaction.followUp({ content: 'Failed to restart the bot flow.', ephemeral: true }).catch(() => {});
+            } else {
+                await interaction.reply({ content: 'Failed to restart the bot flow.', ephemeral: true }).catch(() => {});
+            }
+        }
+        return;
+    }
+
     if (interaction.isButton()) {
         const [action, type, userId] = interaction.customId.split('_');
 
