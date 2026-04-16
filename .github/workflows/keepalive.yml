@@ -7,10 +7,14 @@ on:
 
 permissions: {}
 
+concurrency:
+  group: keepalive-ping
+  cancel-in-progress: true
+
 jobs:
   ping:
     runs-on: ubuntu-latest
-    timeout-minutes: 6
+    timeout-minutes: 4
     steps:
       - name: Open bot-khserver URL
         run: |
@@ -20,7 +24,7 @@ jobs:
           success=0
 
           for attempt in $(seq 1 "${max_attempts}"); do
-            status_code=$(curl -sS --connect-timeout 10 --max-time 45 -A "Bot-Khserver-Keepalive/1.0" -o /dev/null -w "%{http_code}" "${url}" || echo "000")
+            status_code=$(curl -sS --connect-timeout 10 --max-time 20 -A "Bot-Khserver-Keepalive/1.0" -o /dev/null -w "%{http_code}" "${url}" || echo "000")
             echo "Attempt ${attempt}/${max_attempts} HTTP status: ${status_code}"
 
             if [ "${status_code}" -ge 200 ] && [ "${status_code}" -lt 400 ]; then
