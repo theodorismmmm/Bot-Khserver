@@ -2,20 +2,43 @@ name: Keep Render App Awake
 
 on:
   schedule:
-    - cron: '*/8 * * * *'
+    - cron: '*/5 * * * *'
   workflow_dispatch:
 
 permissions: {}
 
+concurrency:
+  group: keepalive-ping
+  cancel-in-progress: true
+
 jobs:
   ping:
     runs-on: ubuntu-latest
+    timeout-minutes: 4
     steps:
       - name: Open bot-khserver URL
         run: |
-          status_code=$(curl -sS --retry 3 --retry-delay 5 --max-time 30 -o /dev/null -w "%{http_code}" https://bot-khserver.onrender.com/)
-          echo "Ping HTTP status: ${status_code}"
-          if [ "${status_code}" -ge 400 ]; then
-            echo "Ping failed with HTTP status ${status_code}" >&2
+          url="https://bot-khserver.onrender.com/"
+          max_attempts=5
+          # 12s gives Render a short warm-up window while keeping total runtime < 4 minutes.
+          delay_seconds=12
+          success=0
+
+          for attempt in $(seq 1 "${max_attempts}"); do
+            status_code=$(curl -sS --connect-timeout 10 --max-time 20 -A "Bot-Khserver-Keepalive/1.0" -o /dev/null -w "%{http_code}" "${url}" || echo "000")
+            echo "Attempt ${attempt}/${max_attempts} HTTP status: ${status_code}"
+
+            if [ "${status_code}" -ge 200 ] && [ "${status_code}" -lt 400 ]; then
+              success=1
+              break
+            fi
+
+            if [ "${attempt}" -lt "${max_attempts}" ]; then
+              sleep "${delay_seconds}"
+            fi
+          done
+
+          if [ "${success}" -ne 1 ]; then
+            echo "Ping failed after ${max_attempts} attempts." >&2
             exit 1
           fi
