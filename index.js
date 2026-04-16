@@ -29,7 +29,7 @@ client.once('ready', () => {
 
 async function registerPaySlashCommand() {
     try {
-        await Promise.all([...client.guilds.cache.values()].map(async (guild) => {
+        for (const guild of client.guilds.cache.values()) {
             const commands = await guild.commands.fetch();
             const existing = commands.find(cmd => cmd.name === 'pay');
 
@@ -40,7 +40,7 @@ async function registerPaySlashCommand() {
                 });
                 console.log(`Registered /pay in ${guild.name}`);
             }
-        }));
+        }
     } catch (err) {
         console.error('Failed to register /pay command:', err);
     }
@@ -104,9 +104,13 @@ client.on('interactionCreate', async interaction => {
             console.error('Error handling /pay:', err);
             const errorResponse = { content: 'Failed to restart the bot flow.', ephemeral: true };
             if (interaction.deferred || interaction.replied) {
-                await interaction.followUp(errorResponse).catch(() => {});
+                await interaction.followUp(errorResponse).catch((followUpErr) => {
+                    console.error('Failed to send /pay follow-up error response:', followUpErr);
+                });
             } else {
-                await interaction.reply(errorResponse).catch(() => {});
+                await interaction.reply(errorResponse).catch((replyErr) => {
+                    console.error('Failed to send /pay error response:', replyErr);
+                });
             }
         }
         return;
