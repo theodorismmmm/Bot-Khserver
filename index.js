@@ -28,7 +28,7 @@ const CLAIM_SHORTCUT_LINK = process.env.CLAIM_SHORTCUT_LINK || 'Available soon';
 const PAYPAL_LINK = 'https://www.paypal.me/transfer959';
 const TICKET_CHANNEL_PREFIX = 'ticket-';
 const GRANTED_USERS_FILE = path.join(__dirname, 'granted-users.json');
-const DISCORD_SNOWFLAKE_REGEX = /^\d{17,19}$/;
+const DISCORD_SNOWFLAKE_REGEX = /^\d{18,19}$/;
 let grantedUsers = new Set();
 
 client.once('ready', async () => {
@@ -311,11 +311,10 @@ client.on('interactionCreate', async interaction => {
             }
 
             const targetUser = interaction.options.getUser('user', true);
-            const hadGrantBefore = grantedUsers.has(targetUser.id);
             const wasGranted = grantedUsers.delete(targetUser.id);
             const saved = await saveGrantedUsers();
             if (!saved) {
-                if (hadGrantBefore) {
+                if (wasGranted) {
                     grantedUsers.add(targetUser.id);
                 }
                 return interaction.reply({
