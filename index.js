@@ -21,9 +21,9 @@ const client = new Client({
 });
 
 // Settings
-const ADMIN_CHANNEL_ID = process.env.ADMIN_CHANNEL_ID;
-const GRANT_MANAGER_ROLE_ID = process.env.GRANT_MANAGER_ROLE_ID;
-const PRO_ROLE_ID = process.env.PRO_ROLE_ID;
+const ADMIN_CHANNEL_ID = '1494680168760082453';
+const GRANT_MANAGER_ROLE_ID = '1492249936513859636';
+const PRO_ROLE_ID = '1493573232383623308';
 const CLAIM_SHORTCUT_LINK = process.env.CLAIM_SHORTCUT_LINK || 'Available soon';
 const PAYPAL_LINK = 'https://www.paypal.me/transfer959';
 const TICKET_CHANNEL_PREFIX = 'ticket-';
