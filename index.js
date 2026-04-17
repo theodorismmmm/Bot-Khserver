@@ -1,8 +1,10 @@
 require('dotenv').config();
 const {
     Client, GatewayIntentBits, Partials, ActionRowBuilder, ButtonBuilder, ButtonStyle,
-    EmbedBuilder, ModalBuilder, TextInputBuilder, TextInputStyle
+    EmbedBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, ApplicationCommandOptionType
 } = require('discord.js');
+const fs = require('node:fs/promises');
+const path = require('node:path');
 const express = require('express');
 
 const app = express();
@@ -20,30 +22,162 @@ const client = new Client({
 
 // Settings
 const ADMIN_CHANNEL_ID = process.env.ADMIN_CHANNEL_ID;
+const GRANT_MANAGER_ROLE_ID = process.env.GRANT_MANAGER_ROLE_ID;
+const PRO_ROLE_ID = process.env.PRO_ROLE_ID;
+const CLAIM_SHORTCUT_LINK = process.env.CLAIM_SHORTCUT_LINK || 'Available soon';
 const PAYPAL_LINK = 'https://www.paypal.me/transfer959';
 const TICKET_CHANNEL_PREFIX = 'ticket-';
+const GRANTED_USERS_FILE = path.join(__dirname, 'granted-users.json');
+const DISCORD_SNOWFLAKE_REGEX = /^\d{18,19}$/;
+let grantedUsers = new Set();
 
-client.once('ready', () => {
+client.once('ready', async () => {
     console.log(`✅ Logged in as ${client.user.tag}`);
-    registerPaySlashCommand();
+    await loadGrantedUsers();
+    await registerSlashCommands();
 });
 
-async function registerPaySlashCommand() {
+async function loadGrantedUsers() {
     try {
-        for (const guild of client.guilds.cache.values()) {
-            const commands = await guild.commands.fetch();
-            const existing = commands.find(cmd => cmd.name === 'pay');
-
-            if (!existing) {
-                await guild.commands.create({
-                    name: 'pay',
-                    description: 'Restart the payment bot flow in this ticket'
-                });
-                console.log(`Registered /pay in ${guild.name}`);
-            }
+        const content = await fs.readFile(GRANTED_USERS_FILE, 'utf8');
+        const parsed = JSON.parse(content);
+        if (Array.isArray(parsed)) {
+            grantedUsers = new Set(parsed.map(String).filter(id => DISCORD_SNOWFLAKE_REGEX.test(id)));
         }
     } catch (err) {
-        console.error('Failed to register /pay command:', err);
+        if (err.code !== 'ENOENT') {
+            console.error('Failed to load granted users:', err);
+        }
+    }
+}
+
+async function saveGrantedUsers() {
+    try {
+        await fs.writeFile(GRANTED_USERS_FILE, JSON.stringify([...grantedUsers], null, 2));
+        return true;
+    } catch (err) {
+        console.error('Failed to save granted users:', err);
+        return false;
+    }
+}
+
+function hasGrantedAccess(member) {
+    return grantedUsers.has(member.id) || (PRO_ROLE_ID && member.roles.cache.has(PRO_ROLE_ID));
+}
+
+async function resolveGuildMember(interaction) {
+    const member = interaction.member;
+    if (member && member.roles && member.roles.cache) {
+        return member;
+    }
+    return interaction.guild.members.fetch(interaction.user.id);
+}
+
+async function updateProRoleForUser(guild, targetUserId, action) {
+    if (!PRO_ROLE_ID) return '';
+
+    let botMember = guild.members.me;
+    if (!botMember) {
+        console.warn(`guild.members.me missing in ${guild.name}, fetching bot member...`);
+        botMember = await guild.members.fetchMe().catch(() => null);
+    }
+    if (!botMember || !botMember.permissions.has('ManageRoles')) {
+        return '\n⚠️ Access was saved, but the bot lacks Manage Roles permission.';
+    }
+
+    const proRole = guild.roles.cache.get(PRO_ROLE_ID) || await guild.roles.fetch(PRO_ROLE_ID).catch(() => null);
+    if (!proRole) {
+        return '\n⚠️ Access was saved, but the configured Pro role was not found.';
+    }
+
+    // Discord requires the bot's highest role to be above the target role to manage it.
+    if (botMember.roles.highest.comparePositionTo(proRole) <= 0) {
+        return '\n⚠️ Access was saved, but the Pro role is higher than or equal to the bot role.';
+    }
+
+    const targetMember = await guild.members.fetch(targetUserId).catch(() => null);
+    if (!targetMember) {
+        return '\n⚠️ Access was saved, but user is not currently in this server.';
+    }
+
+    if (action === 'add') {
+        const roleAdded = await targetMember.roles.add(PRO_ROLE_ID).then(() => true).catch((err) => {
+            console.error('Failed to add pro role during /grant:', err);
+            return false;
+        });
+        if (!roleAdded) {
+            return '\n⚠️ Access was saved, but role assignment failed.';
+        }
+    }
+
+    if (action === 'remove') {
+        const roleRemoved = await targetMember.roles.remove(PRO_ROLE_ID).then(() => true).catch((err) => {
+            console.error('Failed to remove pro role during /removegrant:', err);
+            return false;
+        });
+        if (!roleRemoved) {
+            return '\n⚠️ Saved access was removed, but role removal failed.';
+        }
+    }
+
+    return '';
+}
+
+async function registerSlashCommands() {
+    try {
+        const commandDefinitions = [
+            {
+                name: 'pay',
+                description: 'Restart the payment bot flow in this ticket'
+            },
+            {
+                name: 'grant',
+                description: 'Grant KaHack Pro claim access to a user',
+                options: [
+                    {
+                        name: 'user',
+                        description: 'User to grant access to',
+                        type: ApplicationCommandOptionType.User,
+                        required: true
+                    }
+                ]
+            },
+            {
+                name: 'removegrant',
+                description: 'Remove KaHack Pro claim access from a user',
+                options: [
+                    {
+                        name: 'user',
+                        description: 'User to remove access from',
+                        type: ApplicationCommandOptionType.User,
+                        required: true
+                    }
+                ]
+            },
+            {
+                name: 'claim',
+                description: 'Claim your granted KaHack Pro shortcut link'
+            }
+        ];
+
+        for (const guild of client.guilds.cache.values()) {
+            const existingCommands = await guild.commands.fetch();
+            for (const definition of commandDefinitions) {
+                const existing = existingCommands.find(cmd => cmd.name === definition.name);
+                try {
+                    if (existing) {
+                        await existing.edit(definition);
+                    } else {
+                        await guild.commands.create(definition);
+                    }
+                } catch (commandErr) {
+                    console.error(`Failed to upsert /${definition.name} in ${guild.name}:`, commandErr);
+                }
+            }
+            console.log(`Upserted slash commands in ${guild.name}`);
+        }
+    } catch (err) {
+        console.error('Failed to register slash commands:', err);
     }
 }
 
@@ -86,41 +220,137 @@ async function sendMainMenu(channel, user) {
 
 // Handle all button clicks and forms
 client.on('interactionCreate', async interaction => {
-    if (interaction.isChatInputCommand() && interaction.commandName === 'pay') {
-        if (!interaction.channel || !interaction.channel.name.startsWith(TICKET_CHANNEL_PREFIX)) {
+    if (interaction.isChatInputCommand()) {
+        if (interaction.commandName === 'pay') {
+            if (!interaction.channel || !interaction.channel.name.startsWith(TICKET_CHANNEL_PREFIX)) {
+                return interaction.reply({
+                    content: 'Use this command inside a ticket channel.',
+                    ephemeral: true
+                });
+            }
+
+            try {
+                await interaction.channel.permissionOverwrites.edit(interaction.user.id, { SendMessages: false });
+                await sendMainMenu(interaction.channel, interaction.user);
+                await interaction.reply({
+                    content: '✅ Bot flow restarted in this ticket.',
+                    ephemeral: true
+                });
+            } catch (err) {
+                console.error('Error handling /pay:', err);
+                const errorResponse = { content: 'Failed to restart the bot flow.', ephemeral: true };
+                if (interaction.deferred || interaction.replied) {
+                    await interaction.followUp(errorResponse).catch((followUpErr) => {
+                        console.error('Failed to send /pay follow-up error response:', {
+                            originalError: err,
+                            followUpError: followUpErr
+                        });
+                    });
+                } else {
+                    await interaction.reply(errorResponse).catch((replyErr) => {
+                        console.error('Failed to send /pay error response:', {
+                            originalError: err,
+                            replyError: replyErr
+                        });
+                    });
+                }
+            }
+            return;
+        }
+
+        if (interaction.commandName === 'grant') {
+            if (!interaction.inGuild()) {
+                return interaction.reply({ content: 'This command can only be used in a server.', ephemeral: true });
+            }
+            if (!GRANT_MANAGER_ROLE_ID) {
+                return interaction.reply({ content: 'Grant manager role is not configured.', ephemeral: true });
+            }
+
+            const invoker = await resolveGuildMember(interaction);
+            if (!invoker.roles.cache.has(GRANT_MANAGER_ROLE_ID)) {
+                return interaction.reply({ content: 'You are not allowed to use this command.', ephemeral: true });
+            }
+
+            const targetUser = interaction.options.getUser('user', true);
+            if (targetUser.bot) {
+                return interaction.reply({ content: 'You cannot grant access to bots.', ephemeral: true });
+            }
+
+            const hadGrantBefore = grantedUsers.has(targetUser.id);
+            grantedUsers.add(targetUser.id);
+            const saved = await saveGrantedUsers();
+            if (!saved) {
+                if (!hadGrantBefore) {
+                    grantedUsers.delete(targetUser.id);
+                }
+                return interaction.reply({
+                    content: 'Failed to persist grant data. Try again.',
+                    ephemeral: true
+                });
+            }
+
+            const roleNotice = await updateProRoleForUser(interaction.guild, targetUser.id, 'add');
+
             return interaction.reply({
-                content: 'Use this command inside a ticket channel.',
+                content: `✅ Granted KaHack Pro access to <@${targetUser.id}>.${roleNotice}`,
                 ephemeral: true
             });
         }
 
-        try {
-            await interaction.channel.permissionOverwrites.edit(interaction.user.id, { SendMessages: false });
-            await sendMainMenu(interaction.channel, interaction.user);
-            await interaction.reply({
-                content: '✅ Bot flow restarted in this ticket.',
-                ephemeral: true
-            });
-        } catch (err) {
-            console.error('Error handling /pay:', err);
-            const errorResponse = { content: 'Failed to restart the bot flow.', ephemeral: true };
-            if (interaction.deferred || interaction.replied) {
-                await interaction.followUp(errorResponse).catch((followUpErr) => {
-                    console.error('Failed to send /pay follow-up error response:', {
-                        originalError: err,
-                        followUpError: followUpErr
-                    });
-                });
-            } else {
-                await interaction.reply(errorResponse).catch((replyErr) => {
-                    console.error('Failed to send /pay error response:', {
-                        originalError: err,
-                        replyError: replyErr
-                    });
+        if (interaction.commandName === 'removegrant') {
+            if (!interaction.inGuild()) {
+                return interaction.reply({ content: 'This command can only be used in a server.', ephemeral: true });
+            }
+            if (!GRANT_MANAGER_ROLE_ID) {
+                return interaction.reply({ content: 'Grant manager role is not configured.', ephemeral: true });
+            }
+
+            const invoker = await resolveGuildMember(interaction);
+            if (!invoker.roles.cache.has(GRANT_MANAGER_ROLE_ID)) {
+                return interaction.reply({ content: 'You are not allowed to use this command.', ephemeral: true });
+            }
+
+            const targetUser = interaction.options.getUser('user', true);
+            const wasGranted = grantedUsers.delete(targetUser.id);
+            const saved = await saveGrantedUsers();
+            if (!saved) {
+                if (wasGranted) {
+                    grantedUsers.add(targetUser.id);
+                }
+                return interaction.reply({
+                    content: 'Failed to persist grant data. Try again.',
+                    ephemeral: true
                 });
             }
+
+            const roleNotice = await updateProRoleForUser(interaction.guild, targetUser.id, 'remove');
+
+            return interaction.reply({
+                content: wasGranted
+                    ? `✅ Removed KaHack Pro access from <@${targetUser.id}>.${roleNotice}`
+                    : `ℹ️ <@${targetUser.id}> did not have saved access.${roleNotice}`,
+                ephemeral: true
+            });
         }
-        return;
+
+        if (interaction.commandName === 'claim') {
+            if (!interaction.inGuild()) {
+                return interaction.reply({ content: 'This command can only be used in a server.', ephemeral: true });
+            }
+
+            const member = await resolveGuildMember(interaction);
+            if (!hasGrantedAccess(member)) {
+                return interaction.reply({
+                    content: 'You do not have granted access to claim KaHack Pro.',
+                    ephemeral: true
+                });
+            }
+
+            return interaction.reply({
+                content: `✅ KaHack Pro shortcut link: ${CLAIM_SHORTCUT_LINK}`,
+                ephemeral: true
+            });
+        }
     }
 
     if (interaction.isButton()) {
