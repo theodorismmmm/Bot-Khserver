@@ -28,6 +28,7 @@ const CLAIM_SHORTCUT_LINK = process.env.CLAIM_SHORTCUT_LINK || 'Available soon';
 const PAYPAL_LINK = 'https://www.paypal.me/transfer959';
 const TICKET_CHANNEL_PREFIX = 'ticket-';
 const GRANTED_USERS_FILE = path.join(__dirname, 'granted-users.json');
+const DISCORD_SNOWFLAKE_REGEX = /^\d{17,19}$/;
 let grantedUsers = new Set();
 
 client.once('ready', async () => {
@@ -41,7 +42,7 @@ async function loadGrantedUsers() {
         const content = await fs.readFile(GRANTED_USERS_FILE, 'utf8');
         const parsed = JSON.parse(content);
         if (Array.isArray(parsed)) {
-            grantedUsers = new Set(parsed.map(String));
+            grantedUsers = new Set(parsed.map(String).filter(id => DISCORD_SNOWFLAKE_REGEX.test(id)));
         }
     } catch (err) {
         if (err.code !== 'ENOENT') {
@@ -51,11 +52,75 @@ async function loadGrantedUsers() {
 }
 
 async function saveGrantedUsers() {
-    await fs.writeFile(GRANTED_USERS_FILE, JSON.stringify([...grantedUsers], null, 2));
+    try {
+        await fs.writeFile(GRANTED_USERS_FILE, JSON.stringify([...grantedUsers], null, 2));
+        return true;
+    } catch (err) {
+        console.error('Failed to save granted users:', err);
+        return false;
+    }
 }
 
 function hasGrantedAccess(member) {
-    return grantedUsers.has(member.id) || (PRO_ROLE_ID ? member.roles.cache.has(PRO_ROLE_ID) : false);
+    return grantedUsers.has(member.id) || (PRO_ROLE_ID && member.roles.cache.has(PRO_ROLE_ID));
+}
+
+async function resolveGuildMember(interaction) {
+    const member = interaction.member;
+    if (member && member.roles && member.roles.cache) {
+        return member;
+    }
+    return interaction.guild.members.fetch(interaction.user.id);
+}
+
+async function updateProRoleForUser(guild, targetUserId, action) {
+    if (!PRO_ROLE_ID) return '';
+
+    let botMember = guild.members.me;
+    if (!botMember) {
+        console.warn(`guild.members.me missing in ${guild.name}, fetching bot member...`);
+        botMember = await guild.members.fetchMe().catch(() => null);
+    }
+    if (!botMember || !botMember.permissions.has('ManageRoles')) {
+        return '\n⚠️ Access was saved, but the bot lacks Manage Roles permission.';
+    }
+
+    const proRole = guild.roles.cache.get(PRO_ROLE_ID) || await guild.roles.fetch(PRO_ROLE_ID).catch(() => null);
+    if (!proRole) {
+        return '\n⚠️ Access was saved, but the configured Pro role was not found.';
+    }
+
+    // Discord requires the bot's highest role to be above the target role to manage it.
+    if (botMember.roles.highest.comparePositionTo(proRole) <= 0) {
+        return '\n⚠️ Access was saved, but the Pro role is higher than or equal to the bot role.';
+    }
+
+    const targetMember = await guild.members.fetch(targetUserId).catch(() => null);
+    if (!targetMember) {
+        return '\n⚠️ Access was saved, but user is not currently in this server.';
+    }
+
+    if (action === 'add') {
+        const roleAdded = await targetMember.roles.add(PRO_ROLE_ID).then(() => true).catch((err) => {
+            console.error('Failed to add pro role during /grant:', err);
+            return false;
+        });
+        if (!roleAdded) {
+            return '\n⚠️ Access was saved, but role assignment failed.';
+        }
+    }
+
+    if (action === 'remove') {
+        const roleRemoved = await targetMember.roles.remove(PRO_ROLE_ID).then(() => true).catch((err) => {
+            console.error('Failed to remove pro role during /removegrant:', err);
+            return false;
+        });
+        if (!roleRemoved) {
+            return '\n⚠️ Saved access was removed, but role removal failed.';
+        }
+    }
+
+    return '';
 }
 
 async function registerSlashCommands() {
@@ -96,8 +161,20 @@ async function registerSlashCommands() {
         ];
 
         for (const guild of client.guilds.cache.values()) {
-            await guild.commands.set(commandDefinitions);
-            console.log(`Registered slash commands in ${guild.name}`);
+            const existingCommands = await guild.commands.fetch();
+            for (const definition of commandDefinitions) {
+                const existing = existingCommands.find(cmd => cmd.name === definition.name);
+                try {
+                    if (existing) {
+                        await existing.edit(definition);
+                    } else {
+                        await guild.commands.create(definition);
+                    }
+                } catch (commandErr) {
+                    console.error(`Failed to upsert /${definition.name} in ${guild.name}:`, commandErr);
+                }
+            }
+            console.log(`Upserted slash commands in ${guild.name}`);
         }
     } catch (err) {
         console.error('Failed to register slash commands:', err);
@@ -189,7 +266,7 @@ client.on('interactionCreate', async interaction => {
                 return interaction.reply({ content: 'Grant manager role is not configured.', ephemeral: true });
             }
 
-            const invoker = await interaction.guild.members.fetch(interaction.user.id);
+            const invoker = await resolveGuildMember(interaction);
             if (!invoker.roles.cache.has(GRANT_MANAGER_ROLE_ID)) {
                 return interaction.reply({ content: 'You are not allowed to use this command.', ephemeral: true });
             }
@@ -199,21 +276,20 @@ client.on('interactionCreate', async interaction => {
                 return interaction.reply({ content: 'You cannot grant access to bots.', ephemeral: true });
             }
 
+            const hadGrantBefore = grantedUsers.has(targetUser.id);
             grantedUsers.add(targetUser.id);
-            await saveGrantedUsers();
-
-            let roleNotice = '';
-            if (PRO_ROLE_ID) {
-                const targetMember = await interaction.guild.members.fetch(targetUser.id).catch(() => null);
-                if (targetMember) {
-                    await targetMember.roles.add(PRO_ROLE_ID).catch((err) => {
-                        console.error('Failed to add pro role during /grant:', err);
-                        roleNotice = '\n⚠️ Access was saved, but role assignment failed.';
-                    });
-                } else {
-                    roleNotice = '\n⚠️ Access was saved, but user is not currently in this server.';
+            const saved = await saveGrantedUsers();
+            if (!saved) {
+                if (!hadGrantBefore) {
+                    grantedUsers.delete(targetUser.id);
                 }
+                return interaction.reply({
+                    content: 'Failed to persist grant data. Try again.',
+                    ephemeral: true
+                });
             }
+
+            const roleNotice = await updateProRoleForUser(interaction.guild, targetUser.id, 'add');
 
             return interaction.reply({
                 content: `✅ Granted KaHack Pro access to <@${targetUser.id}>.${roleNotice}`,
@@ -229,28 +305,29 @@ client.on('interactionCreate', async interaction => {
                 return interaction.reply({ content: 'Grant manager role is not configured.', ephemeral: true });
             }
 
-            const invoker = await interaction.guild.members.fetch(interaction.user.id);
+            const invoker = await resolveGuildMember(interaction);
             if (!invoker.roles.cache.has(GRANT_MANAGER_ROLE_ID)) {
                 return interaction.reply({ content: 'You are not allowed to use this command.', ephemeral: true });
             }
 
             const targetUser = interaction.options.getUser('user', true);
-            const hadGrant = grantedUsers.delete(targetUser.id);
-            await saveGrantedUsers();
-
-            let roleNotice = '';
-            if (PRO_ROLE_ID) {
-                const targetMember = await interaction.guild.members.fetch(targetUser.id).catch(() => null);
-                if (targetMember) {
-                    await targetMember.roles.remove(PRO_ROLE_ID).catch((err) => {
-                        console.error('Failed to remove pro role during /removegrant:', err);
-                        roleNotice = '\n⚠️ Saved access was removed, but role removal failed.';
-                    });
+            const hadGrantBefore = grantedUsers.has(targetUser.id);
+            const wasGranted = grantedUsers.delete(targetUser.id);
+            const saved = await saveGrantedUsers();
+            if (!saved) {
+                if (hadGrantBefore) {
+                    grantedUsers.add(targetUser.id);
                 }
+                return interaction.reply({
+                    content: 'Failed to persist grant data. Try again.',
+                    ephemeral: true
+                });
             }
 
+            const roleNotice = await updateProRoleForUser(interaction.guild, targetUser.id, 'remove');
+
             return interaction.reply({
-                content: hadGrant
+                content: wasGranted
                     ? `✅ Removed KaHack Pro access from <@${targetUser.id}>.${roleNotice}`
                     : `ℹ️ <@${targetUser.id}> did not have saved access.${roleNotice}`,
                 ephemeral: true
@@ -262,7 +339,7 @@ client.on('interactionCreate', async interaction => {
                 return interaction.reply({ content: 'This command can only be used in a server.', ephemeral: true });
             }
 
-            const member = await interaction.guild.members.fetch(interaction.user.id);
+            const member = await resolveGuildMember(interaction);
             if (!hasGrantedAccess(member)) {
                 return interaction.reply({
                     content: 'You do not have granted access to claim KaHack Pro.',
