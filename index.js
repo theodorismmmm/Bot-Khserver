@@ -36,7 +36,7 @@ const GRANT_MANAGER_USER_IDS = new Set(
         .filter(id => DISCORD_SNOWFLAKE_REGEX.test(id))
 );
 if (!process.env.GRANT_MANAGER_USER_IDS) {
-    console.warn('GRANT_MANAGER_USER_IDS is not set; using default grant manager user ID.');
+    console.warn(`GRANT_MANAGER_USER_IDS is not set; using default grant manager user ID: ${DEFAULT_GRANT_MANAGER_USER_ID}`);
 }
 const PAYPAL_LINK = 'https://www.paypal.me/transfer959';
 const TICKET_CHANNEL_PREFIX = 'ticket-';
