@@ -1,7 +1,8 @@
 require('dotenv').config();
 const {
     Client, GatewayIntentBits, Partials, ActionRowBuilder, ButtonBuilder, ButtonStyle,
-    EmbedBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, ApplicationCommandOptionType
+    EmbedBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, ApplicationCommandOptionType,
+    REST, Routes
 } = require('discord.js');
 const fs = require('node:fs/promises');
 const path = require('node:path');
@@ -42,6 +43,15 @@ const PAYPAL_LINK = 'https://www.paypal.me/transfer959';
 const TICKET_CHANNEL_PREFIX = 'ticket-';
 const GRANTED_USERS_FILE = path.join(__dirname, 'granted-users.json');
 let grantedUsers = new Set();
+
+// In-memory admin set for /grant, /lockchat, /unlock.
+// Seeded with OWNER_ID from .env; survives only until bot restart.
+const authorizedAdmins = new Set(
+    [process.env.OWNER_ID].filter(id => id && DISCORD_SNOWFLAKE_REGEX.test(id))
+);
+if (!process.env.OWNER_ID) {
+    console.warn('OWNER_ID is not set; no one will have initial admin access for /grant, /lockchat, /unlock.');
+}
 
 client.once('ready', async () => {
     console.log(`✅ Logged in as ${client.user.tag}`);
@@ -149,11 +159,11 @@ async function registerSlashCommands() {
             },
             {
                 name: 'grant',
-                description: 'Grant KaHack Pro claim access to a user',
+                description: 'Grant admin permissions to a user',
                 options: [
                     {
                         name: 'user',
-                        description: 'User to grant access to',
+                        description: 'The user to grant admin permissions to',
                         type: ApplicationCommandOptionType.User,
                         required: true
                     }
@@ -174,25 +184,31 @@ async function registerSlashCommands() {
             {
                 name: 'claim',
                 description: 'Claim your granted KaHack Pro shortcut link'
+            },
+            {
+                name: 'lockchat',
+                description: 'Lock the current ticket channel',
+                options: [
+                    {
+                        name: 'reason',
+                        description: 'The reason for locking the chat',
+                        type: ApplicationCommandOptionType.String,
+                        required: true
+                    }
+                ]
+            },
+            {
+                name: 'unlock',
+                description: 'Unlock the current ticket channel'
             }
         ];
 
-        for (const guild of client.guilds.cache.values()) {
-            const existingCommands = await guild.commands.fetch();
-            for (const definition of commandDefinitions) {
-                const existing = existingCommands.find(cmd => cmd.name === definition.name);
-                try {
-                    if (existing) {
-                        await existing.edit(definition);
-                    } else {
-                        await guild.commands.create(definition);
-                    }
-                } catch (commandErr) {
-                    console.error(`Failed to upsert /${definition.name} in ${guild.name}:`, commandErr);
-                }
-            }
-            console.log(`Upserted slash commands in ${guild.name}`);
-        }
+        const rest = new REST({ version: '10' }).setToken(process.env.TOKEN);
+        await rest.put(
+            Routes.applicationCommands(client.user.id),
+            { body: commandDefinitions }
+        );
+        console.log('Successfully registered global slash commands.');
     } catch (err) {
         console.error('Failed to register slash commands:', err);
     }
@@ -279,37 +295,20 @@ client.on('interactionCreate', async interaction => {
             if (!interaction.inGuild()) {
                 return interaction.reply({ content: 'This command can only be used in a server.', ephemeral: true });
             }
-            if (!GRANT_MANAGER_ROLE_ID && GRANT_MANAGER_USER_IDS.size === 0) {
-                return interaction.reply({ content: 'Grant manager access is not configured.', ephemeral: true });
-            }
 
-            const invoker = await resolveGuildMember(interaction);
-            if (!canManageGrants(invoker)) {
+            if (!authorizedAdmins.has(interaction.user.id)) {
                 return interaction.reply({ content: 'You are not allowed to use this command.', ephemeral: true });
             }
 
             const targetUser = interaction.options.getUser('user', true);
             if (targetUser.bot) {
-                return interaction.reply({ content: 'You cannot grant access to bots.', ephemeral: true });
+                return interaction.reply({ content: 'You cannot grant admin permissions to bots.', ephemeral: true });
             }
 
-            const hadGrantBefore = grantedUsers.has(targetUser.id);
-            grantedUsers.add(targetUser.id);
-            const saved = await saveGrantedUsers();
-            if (!saved) {
-                if (!hadGrantBefore) {
-                    grantedUsers.delete(targetUser.id);
-                }
-                return interaction.reply({
-                    content: 'Failed to persist grant data. Try again.',
-                    ephemeral: true
-                });
-            }
-
-            const roleNotice = await updateProRoleForUser(interaction.guild, targetUser.id, 'add');
+            authorizedAdmins.add(targetUser.id);
 
             return interaction.reply({
-                content: `✅ Granted KaHack Pro access to <@${targetUser.id}>.${roleNotice}`,
+                content: `✅ Granted admin permissions to <@${targetUser.id}>.`,
                 ephemeral: true
             });
         }
@@ -367,6 +366,58 @@ client.on('interactionCreate', async interaction => {
                 content: `✅ KaHack Pro shortcut link: ${CLAIM_SHORTCUT_LINK}`,
                 ephemeral: true
             });
+        }
+
+        if (interaction.commandName === 'lockchat') {
+            if (!interaction.inGuild()) {
+                return interaction.reply({ content: 'This command can only be used in a server.', ephemeral: true });
+            }
+            if (!interaction.channel || !interaction.channel.name.startsWith(TICKET_CHANNEL_PREFIX)) {
+                return interaction.reply({ content: 'Use this command inside a ticket channel.', ephemeral: true });
+            }
+            if (!authorizedAdmins.has(interaction.user.id)) {
+                return interaction.reply({ content: 'You are not allowed to use this command.', ephemeral: true });
+            }
+
+            const reason = interaction.options.getString('reason', true);
+            const ticketMembers = interaction.channel.members.filter(m => !m.user.bot && !authorizedAdmins.has(m.user.id));
+
+            try {
+                for (const [, member] of ticketMembers) {
+                    await interaction.channel.permissionOverwrites.edit(member.user.id, { SendMessages: false });
+                }
+                const embed = new EmbedBuilder()
+                    .setDescription(`🔒 **Ticket Locked by Admin**\nReason: ${reason}`)
+                    .setColor('#ff0000');
+                return interaction.reply({ embeds: [embed] });
+            } catch (err) {
+                console.error('Error handling /lockchat:', err);
+                return interaction.reply({ content: 'Failed to lock the chat.', ephemeral: true });
+            }
+        }
+
+        if (interaction.commandName === 'unlock') {
+            if (!interaction.inGuild()) {
+                return interaction.reply({ content: 'This command can only be used in a server.', ephemeral: true });
+            }
+            if (!interaction.channel || !interaction.channel.name.startsWith(TICKET_CHANNEL_PREFIX)) {
+                return interaction.reply({ content: 'Use this command inside a ticket channel.', ephemeral: true });
+            }
+            if (!authorizedAdmins.has(interaction.user.id)) {
+                return interaction.reply({ content: 'You are not allowed to use this command.', ephemeral: true });
+            }
+
+            const ticketMembers = interaction.channel.members.filter(m => !m.user.bot && !authorizedAdmins.has(m.user.id));
+
+            try {
+                for (const [, member] of ticketMembers) {
+                    await interaction.channel.permissionOverwrites.edit(member.user.id, { SendMessages: true });
+                }
+                return interaction.reply({ content: '🔓 **Ticket Unlocked.** You can now send messages.' });
+            } catch (err) {
+                console.error('Error handling /unlock:', err);
+                return interaction.reply({ content: 'Failed to unlock the chat.', ephemeral: true });
+            }
         }
     }
 
