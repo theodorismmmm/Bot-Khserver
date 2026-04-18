@@ -27,7 +27,7 @@ const PRO_ROLE_ID = '1493573232383623308';
 const CLAIM_SHORTCUT_LINK = process.env.CLAIM_SHORTCUT_LINK || 'https://www.icloud.com/shortcuts/324c1e4c47824fbbbc36c48b0f7143f0';
 const DISCORD_SNOWFLAKE_REGEX = /^\d{18,19}$/;
 const GRANT_MANAGER_USER_IDS = new Set(
-    (process.env.GRANT_MANAGER_USER_IDS || '')
+    (process.env.GRANT_MANAGER_USER_IDS || '1020796397764747287')
         .split(',')
         .map(id => id.trim())
         .filter(Boolean)
