@@ -3,17 +3,18 @@
 ## Slash Commands
 
 - `/pay` - Restarts the payment flow in a ticket channel.
-- `/grant user:<user>` - Grants KaHack Pro claim access (manager-role only).
-- `/removegrant user:<user>` - Removes KaHack Pro claim access (manager-role only).
+- `/grant user:<user>` - Grants KaHack Pro claim access (grant-manager role or configured manager user ID).
+- `/removegrant user:<user>` - Removes KaHack Pro claim access (grant-manager role or configured manager user ID).
 - `/claim` - Returns the KaHack Pro shortcut link for users with granted access.
 
 ## Environment Variables
 
 - `TOKEN`
 - `ADMIN_CHANNEL_ID`
-- `GRANT_MANAGER_ROLE_ID` (required for `/grant` and `/removegrant`)
+- `GRANT_MANAGER_ROLE_ID` (optional if `GRANT_MANAGER_USER_IDS` is used)
+- `GRANT_MANAGER_USER_IDS` (optional comma-separated Discord user IDs allowed to use `/grant` and `/removegrant`; add `@imsosickofit`’s user ID here)
 - `PRO_ROLE_ID` (optional, role auto-added/removed when granting)
-- `CLAIM_SHORTCUT_LINK` (optional, default is `Available soon`)
+- `CLAIM_SHORTCUT_LINK` (optional, default is `https://www.icloud.com/shortcuts/324c1e4c47824fbbbc36c48b0f7143f0`)
 
 ## Grant Storage
 

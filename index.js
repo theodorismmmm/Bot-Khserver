@@ -24,11 +24,18 @@ const client = new Client({
 const ADMIN_CHANNEL_ID = '1494680168760082453';
 const GRANT_MANAGER_ROLE_ID = '1492249936513859636';
 const PRO_ROLE_ID = '1493573232383623308';
-const CLAIM_SHORTCUT_LINK = process.env.CLAIM_SHORTCUT_LINK || 'Available soon';
+const CLAIM_SHORTCUT_LINK = process.env.CLAIM_SHORTCUT_LINK || 'https://www.icloud.com/shortcuts/324c1e4c47824fbbbc36c48b0f7143f0';
+const DISCORD_SNOWFLAKE_REGEX = /^\d{18,19}$/;
+const GRANT_MANAGER_USER_IDS = new Set(
+    (process.env.GRANT_MANAGER_USER_IDS || '')
+        .split(',')
+        .map(id => id.trim())
+        .filter(Boolean)
+        .filter(id => DISCORD_SNOWFLAKE_REGEX.test(id))
+);
 const PAYPAL_LINK = 'https://www.paypal.me/transfer959';
 const TICKET_CHANNEL_PREFIX = 'ticket-';
 const GRANTED_USERS_FILE = path.join(__dirname, 'granted-users.json');
-const DISCORD_SNOWFLAKE_REGEX = /^\d{18,19}$/;
 let grantedUsers = new Set();
 
 client.once('ready', async () => {
@@ -63,6 +70,11 @@ async function saveGrantedUsers() {
 
 function hasGrantedAccess(member) {
     return grantedUsers.has(member.id) || (PRO_ROLE_ID && member.roles.cache.has(PRO_ROLE_ID));
+}
+
+function canManageGrants(member) {
+    return (GRANT_MANAGER_ROLE_ID && member.roles.cache.has(GRANT_MANAGER_ROLE_ID))
+        || GRANT_MANAGER_USER_IDS.has(member.id);
 }
 
 async function resolveGuildMember(interaction) {
@@ -262,12 +274,12 @@ client.on('interactionCreate', async interaction => {
             if (!interaction.inGuild()) {
                 return interaction.reply({ content: 'This command can only be used in a server.', ephemeral: true });
             }
-            if (!GRANT_MANAGER_ROLE_ID) {
-                return interaction.reply({ content: 'Grant manager role is not configured.', ephemeral: true });
+            if (!GRANT_MANAGER_ROLE_ID && GRANT_MANAGER_USER_IDS.size === 0) {
+                return interaction.reply({ content: 'Grant manager access is not configured.', ephemeral: true });
             }
 
             const invoker = await resolveGuildMember(interaction);
-            if (!invoker.roles.cache.has(GRANT_MANAGER_ROLE_ID)) {
+            if (!canManageGrants(invoker)) {
                 return interaction.reply({ content: 'You are not allowed to use this command.', ephemeral: true });
             }
 
@@ -301,12 +313,12 @@ client.on('interactionCreate', async interaction => {
             if (!interaction.inGuild()) {
                 return interaction.reply({ content: 'This command can only be used in a server.', ephemeral: true });
             }
-            if (!GRANT_MANAGER_ROLE_ID) {
-                return interaction.reply({ content: 'Grant manager role is not configured.', ephemeral: true });
+            if (!GRANT_MANAGER_ROLE_ID && GRANT_MANAGER_USER_IDS.size === 0) {
+                return interaction.reply({ content: 'Grant manager access is not configured.', ephemeral: true });
             }
 
             const invoker = await resolveGuildMember(interaction);
-            if (!invoker.roles.cache.has(GRANT_MANAGER_ROLE_ID)) {
+            if (!canManageGrants(invoker)) {
                 return interaction.reply({ content: 'You are not allowed to use this command.', ephemeral: true });
             }
 
