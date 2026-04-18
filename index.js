@@ -26,8 +26,9 @@ const GRANT_MANAGER_ROLE_ID = '1492249936513859636';
 const PRO_ROLE_ID = '1493573232383623308';
 const CLAIM_SHORTCUT_LINK = process.env.CLAIM_SHORTCUT_LINK || 'https://www.icloud.com/shortcuts/324c1e4c47824fbbbc36c48b0f7143f0';
 const DISCORD_SNOWFLAKE_REGEX = /^\d{18,19}$/;
+const DEFAULT_GRANT_MANAGER_USER_ID = '1020796397764747287';
 const GRANT_MANAGER_USER_IDS = new Set(
-    (process.env.GRANT_MANAGER_USER_IDS || '1020796397764747287')
+    (process.env.GRANT_MANAGER_USER_IDS || DEFAULT_GRANT_MANAGER_USER_ID)
         .split(',')
         .map(id => id.trim())
         .filter(Boolean)
