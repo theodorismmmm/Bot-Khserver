@@ -59,6 +59,11 @@ if (!process.env.OWNER_ID) {
 // Per-user state for the answers channel.
 // { timeoutEnd: Date|null, nextNoPermMs: number }
 const answersChannelState = new Map();
+// Timeout at or above this threshold triggers a kick instead of another timeout.
+const ANSWERS_KICK_THRESHOLD_MS = 3600000; // 60 minutes
+function defaultAnswersState() {
+    return { timeoutEnd: null, nextNoPermMs: 10000 };
+}
 
 // --- Answers channel helpers ---
 
@@ -103,8 +108,11 @@ function buildQuizAnswersEmbed(quizData) {
     for (let i = 0; i < shown; i++) {
         const q = questions[i];
         const choices = Array.isArray(q.choices) ? q.choices : [];
-        const correct = choices.filter(c => c.correct).map(c => String(c.answer || '?'));
-        const qType = choices.length <= 2 ? 'True/False' : 'Multiple Choice';
+        const correct = choices.filter(c => c.correct).map(c => String(c.answer || 'Unknown'));
+        // Prefer a question type field from the API; fall back to choice count heuristic.
+        const apiType = q.type || q.questionFormat || '';
+        const isTrueFalse = /true.?false/i.test(String(apiType)) || (choices.length === 2 && choices.every(c => /^(true|false|yes|no)$/i.test(String(c.answer || ''))));
+        const qType = isTrueFalse ? 'True/False' : 'Multiple Choice';
         const questionText = String(q.question || 'Unknown').substring(0, 100);
         fields.push({
             name: `Q${i + 1}: ${questionText}`,
@@ -643,7 +651,7 @@ client.on('messageCreate', async (message) => {
         return;
     }
 
-    const state = answersChannelState.get(userId) || { timeoutEnd: null, nextNoPermMs: 10000 };
+    const state = answersChannelState.get(userId) || defaultAnswersState();
 
     // Bypass detection: delete messages sent during tracked timeout window
     if (state.timeoutEnd && new Date() < state.timeoutEnd) {
@@ -657,7 +665,7 @@ client.on('messageCreate', async (message) => {
         const timeoutMs = state.nextNoPermMs;
 
         // Kick when threshold reaches or exceeds 60 minutes
-        if (timeoutMs >= 3600000) {
+        if (timeoutMs >= ANSWERS_KICK_THRESHOLD_MS) {
             const kickMsg = await message.channel.send(
                 `❌ <@${userId}> You have been kicked for repeated unauthorized access attempts.`
             );
@@ -672,7 +680,7 @@ client.on('messageCreate', async (message) => {
         const timeoutEnd = new Date(Date.now() + timeoutMs);
         answersChannelState.set(userId, {
             timeoutEnd,
-            nextNoPermMs: Math.min(timeoutMs * 2, 3600000)
+            nextNoPermMs: Math.min(timeoutMs * 2, ANSWERS_KICK_THRESHOLD_MS)
         });
         await member.timeout(timeoutMs, 'No permission for answers channel').catch(err =>
             console.error('Timeout failed:', err)
