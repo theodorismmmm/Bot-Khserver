@@ -23,10 +23,13 @@ const client = new Client({
 
 // Settings
 const ADMIN_CHANNEL_ID = '1494680168760082453';
+const ANSWERS_CHANNEL_ID = '1495360534650818661';
 const GRANT_MANAGER_ROLE_ID = '1492249936513859636';
 const PRO_ROLE_ID = '1493573232383623308';
 const CLAIM_SHORTCUT_LINK = process.env.CLAIM_SHORTCUT_LINK || 'https://www.icloud.com/shortcuts/324c1e4c47824fbbbc36c48b0f7143f0';
 const DISCORD_SNOWFLAKE_REGEX = /^\d{18,19}$/;
+const KAHOOT_UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const KAHOOT_PIN_REGEX = /^\d{6,7}$/;
 // Project default admin grant manager ID; override via GRANT_MANAGER_USER_IDS in deployment config.
 const DEFAULT_GRANT_MANAGER_USER_ID = '1020796397764747287';
 const GRANT_MANAGER_USER_IDS = new Set(
@@ -51,6 +54,86 @@ const authorizedAdmins = new Set(
 );
 if (!process.env.OWNER_ID) {
     console.warn('OWNER_ID is not set; no one will have initial admin access for /grant, /lockchat, /unlock.');
+}
+
+// Per-user state for the answers channel.
+// { timeoutEnd: Date|null, nextNoPermMs: number }
+const answersChannelState = new Map();
+
+// --- Answers channel helpers ---
+
+function formatDuration(ms) {
+    const s = Math.round(ms / 1000);
+    if (s < 60) return `${s} second${s !== 1 ? 's' : ''}`;
+    const m = Math.round(ms / 60000);
+    if (m < 60) return `${m} minute${m !== 1 ? 's' : ''}`;
+    const h = Math.round(ms / 3600000);
+    return `${h} hour${h !== 1 ? 's' : ''}`;
+}
+
+async function fetchKahootQuiz(uuid) {
+    try {
+        const res = await fetch(`https://play.kahoot.it/rest/kahoots/${uuid}`, {
+            headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' }
+        });
+        if (!res.ok) return null;
+        return await res.json();
+    } catch {
+        return null;
+    }
+}
+
+async function fetchKahootSession(pin) {
+    try {
+        const res = await fetch(`https://kahoot.it/reserve/session/${pin}/?${Date.now()}`, {
+            headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' }
+        });
+        if (!res.ok) return null;
+        return await res.json();
+    } catch {
+        return null;
+    }
+}
+
+function buildQuizAnswersEmbed(quizData) {
+    const questions = Array.isArray(quizData.questions) ? quizData.questions : [];
+    const total = questions.length;
+    const shown = Math.min(total, 25);
+    const fields = [];
+    for (let i = 0; i < shown; i++) {
+        const q = questions[i];
+        const choices = Array.isArray(q.choices) ? q.choices : [];
+        const correct = choices.filter(c => c.correct).map(c => String(c.answer || '?'));
+        const qType = choices.length <= 2 ? 'True/False' : 'Multiple Choice';
+        const questionText = String(q.question || 'Unknown').substring(0, 100);
+        fields.push({
+            name: `Q${i + 1}: ${questionText}`,
+            value: `**Type:** ${qType}\n**Answer:** ${correct.join(', ') || 'N/A'}`,
+            inline: false
+        });
+    }
+    if (fields.length === 0) {
+        fields.push({ name: 'No questions found', value: 'This quiz has no accessible questions.', inline: false });
+    }
+    return new EmbedBuilder()
+        .setTitle(`📋 ${String(quizData.title || 'Kahoot Quiz').substring(0, 250)}`)
+        .setDescription(`${total} question(s)${total > 25 ? ' (showing first 25)' : ''}`)
+        .addFields(fields)
+        .setColor('#46D975')
+        .setFooter({ text: '⏱️ You have been timed out for 10 seconds (anti-abuse)' });
+}
+
+function buildSessionInfoEmbed(pin, data) {
+    const qArr = Array.isArray(data.quizQuestionAnswers) ? data.quizQuestionAnswers : [];
+    const typeLines = qArr.length > 0
+        ? qArr.slice(0, 25).map((n, i) => `Q${i + 1}: ${n <= 2 ? 'True/False' : `Multiple Choice (${n} options)`}`).join('\n')
+        : 'No question data available.';
+    return new EmbedBuilder()
+        .setTitle(`🎮 Game PIN: ${pin}`)
+        .setDescription(`**Type:** ${data.kahootType || data.quizType || 'quiz'}\n**Questions:** ${qArr.length}`)
+        .addFields({ name: 'Question Types', value: typeLines.substring(0, 1024) })
+        .setColor('#46D975')
+        .setFooter({ text: '⏱️ You have been timed out for 10 seconds (anti-abuse)' });
 }
 
 client.once('ready', async () => {
@@ -543,6 +626,107 @@ client.on('interactionCreate', async interaction => {
             await interaction.message.delete();
         }
     }
+});
+
+// --- Answers channel: game ID lookup ---
+client.on('messageCreate', async (message) => {
+    if (message.channel.id !== ANSWERS_CHANNEL_ID) return;
+    if (message.author.bot) return;
+
+    const userId = message.author.id;
+    const guild = message.guild;
+    if (!guild) return;
+
+    const member = message.member || await guild.members.fetch(userId).catch(() => null);
+    if (!member) {
+        await message.delete().catch(() => {});
+        return;
+    }
+
+    const state = answersChannelState.get(userId) || { timeoutEnd: null, nextNoPermMs: 10000 };
+
+    // Bypass detection: delete messages sent during tracked timeout window
+    if (state.timeoutEnd && new Date() < state.timeoutEnd) {
+        await message.delete().catch(() => {});
+        return;
+    }
+
+    // Grant-perms check
+    if (!hasGrantedAccess(member)) {
+        await message.delete().catch(() => {});
+        const timeoutMs = state.nextNoPermMs;
+
+        // Kick when threshold reaches or exceeds 60 minutes
+        if (timeoutMs >= 3600000) {
+            const kickMsg = await message.channel.send(
+                `❌ <@${userId}> You have been kicked for repeated unauthorized access attempts.`
+            );
+            await member.kick('Repeated unauthorized access to answers channel').catch(err =>
+                console.error('Kick failed:', err)
+            );
+            setTimeout(() => kickMsg.delete().catch(() => {}), 10000);
+            answersChannelState.delete(userId);
+            return;
+        }
+
+        const timeoutEnd = new Date(Date.now() + timeoutMs);
+        answersChannelState.set(userId, {
+            timeoutEnd,
+            nextNoPermMs: Math.min(timeoutMs * 2, 3600000)
+        });
+        await member.timeout(timeoutMs, 'No permission for answers channel').catch(err =>
+            console.error('Timeout failed:', err)
+        );
+        const noPermsMsg = await message.channel.send(
+            `❌ <@${userId}> You don't have permission to use this feature. You have been timed out for **${formatDuration(timeoutMs)}**.`
+        );
+        setTimeout(() => noPermsMsg.delete().catch(() => {}), Math.min(timeoutMs, 30000));
+        return;
+    }
+
+    // User has grant perms — validate and look up game ID
+    const input = message.content.trim();
+    await message.delete().catch(() => {});
+
+    const isUUID = KAHOOT_UUID_REGEX.test(input);
+    const isPIN = KAHOOT_PIN_REGEX.test(input);
+
+    if (!isUUID && !isPIN) {
+        const errMsg = await message.channel.send(
+            `❌ <@${userId}> Invalid game ID. Enter a 6-7 digit Kahoot PIN or a quiz UUID.`
+        );
+        const timeoutEnd = new Date(Date.now() + 10000);
+        answersChannelState.set(userId, { ...state, timeoutEnd });
+        await member.timeout(10000, 'Invalid game ID format').catch(() => {});
+        setTimeout(() => errMsg.delete().catch(() => {}), 10000);
+        return;
+    }
+
+    let embed = null;
+    if (isUUID) {
+        const quizData = await fetchKahootQuiz(input);
+        if (quizData) embed = buildQuizAnswersEmbed(quizData);
+    } else {
+        const sessionData = await fetchKahootSession(input);
+        if (sessionData) embed = buildSessionInfoEmbed(input, sessionData);
+    }
+
+    if (!embed) {
+        const errMsg = await message.channel.send(
+            `❌ <@${userId}> Game not found or expired. Check the ID and try again.`
+        );
+        const timeoutEnd = new Date(Date.now() + 10000);
+        answersChannelState.set(userId, { ...state, timeoutEnd });
+        await member.timeout(10000, 'Game ID not found').catch(() => {});
+        setTimeout(() => errMsg.delete().catch(() => {}), 10000);
+        return;
+    }
+
+    // Valid game — post answers and apply anti-abuse timeout
+    await message.channel.send({ embeds: [embed] });
+    const timeoutEnd = new Date(Date.now() + 10000);
+    answersChannelState.set(userId, { ...state, timeoutEnd });
+    await member.timeout(10000, 'Anti-abuse timeout after answer lookup').catch(() => {});
 });
 
 // Start the bot
