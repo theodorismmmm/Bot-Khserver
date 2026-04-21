@@ -6,10 +6,107 @@ const {
 } = require('discord.js');
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const express = require('express');
 
 const app = express();
+app.use(express.json());
 app.get('/', (req, res) => res.send('Bot is running!'));
+
+// ─── XPay order-confirmation endpoint ────────────────────────────────────────
+// Receives order events from the XPay web app and posts a confirmation embed
+// into the configured Discord channel (XPAY_CHANNEL_ID).
+const XPAY_STATUS_EMOJI   = { pending: '🕐', confirmed: '✅', failed: '❌' };
+const XPAY_METHOD_LABELS  = { paypal: 'PayPal', amazon_giftcard: 'Amazon Gift Card' };
+const XPAY_STATUS_COLORS  = { confirmed: 0x00ff88, failed: 0xff3355, pending: 0xffcc00 };
+
+function xpaySecretValid(provided, expected) {
+    if (!provided || !expected) return false;
+    try {
+        const a = Buffer.from(provided);
+        const b = Buffer.from(expected);
+        if (a.length !== b.length) return false;
+        return crypto.timingSafeEqual(a, b);
+    } catch {
+        return false;
+    }
+}
+
+app.post('/xpay/order', async (req, res) => {
+    const XPAY_SHARED_SECRET = process.env.XPAY_SHARED_SECRET;
+    const XPAY_CHANNEL_ID    = process.env.XPAY_CHANNEL_ID;
+
+    // Validate shared secret (x-xpay-signature or Authorization: Bearer)
+    const sigHeader  = req.headers['x-xpay-signature'];
+    const authHeader = req.headers['authorization'];
+    const provided   = sigHeader ||
+        (authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null);
+
+    if (!xpaySecretValid(provided, XPAY_SHARED_SECRET)) {
+        return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const {
+        orderId, country, currency, items,
+        subtotal, fee, total,
+        paymentMethod, status, timestamp, customerNote
+    } = req.body;
+
+    if (!orderId || !currency || total == null || !status || !paymentMethod) {
+        return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    const statusEmoji  = XPAY_STATUS_EMOJI[status]  ?? '❓';
+    const methodLabel  = XPAY_METHOD_LABELS[paymentMethod] ?? paymentMethod;
+    const statusColor  = XPAY_STATUS_COLORS[status] ?? 0xffcc00;
+    const statusLabel  = status.charAt(0).toUpperCase() + status.slice(1);
+
+    const itemLines = Array.isArray(items) && items.length
+        ? items.map(i => `\`${i.qty}x\` **${i.name}** — ${currency} ${Number(i.lineTotal).toFixed(2)}`).join('\n')
+        : '_No items_';
+
+    const embed = new EmbedBuilder()
+        .setTitle(`${statusEmoji} Order ${orderId}`)
+        .setColor(statusColor)
+        .addFields(
+            { name: '📦 Items',    value: itemLines },
+            {
+                name:   '💰 Summary',
+                value:  `Subtotal: **${currency} ${Number(subtotal ?? 0).toFixed(2)}**\nFee: **${currency} ${Number(fee ?? 0).toFixed(2)}**\nTotal: **${currency} ${Number(total).toFixed(2)}**`,
+                inline: true
+            },
+            { name: '🌍 Country',  value: country      || 'N/A',      inline: true },
+            { name: '💳 Payment',  value: methodLabel,                 inline: true },
+            { name: '📊 Status',   value: statusLabel,                 inline: true }
+        )
+        .setTimestamp(timestamp ? new Date(timestamp) : new Date())
+        .setFooter({ text: `Order ID: ${orderId}` });
+
+    if (customerNote) {
+        embed.addFields({ name: '📝 Note', value: customerNote });
+    }
+
+    if (!XPAY_CHANNEL_ID) {
+        return res.status(503).json({ error: 'XPAY_CHANNEL_ID is not configured' });
+    }
+
+    try {
+        if (!client.isReady()) {
+            return res.status(503).json({ error: 'Bot is not ready yet' });
+        }
+        const channel = client.channels.cache.get(XPAY_CHANNEL_ID);
+        if (!channel) {
+            return res.status(503).json({ error: 'Target channel not available' });
+        }
+        await channel.send({ embeds: [embed] });
+        res.json({ ok: true, orderId });
+    } catch (err) {
+        console.error('XPay: failed to post order embed:', err.message);
+        res.status(500).json({ error: 'Failed to post message' });
+    }
+});
+// ─────────────────────────────────────────────────────────────────────────────
+
 app.listen(process.env.PORT || 3000, () => console.log('Web server running'));
 
 const client = new Client({
