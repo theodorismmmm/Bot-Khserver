@@ -415,7 +415,9 @@ client.on('channelCreate', async (channel) => {
             if (user) {
                 // 1. Lock the channel so the user cannot type yet
                 await channel.permissionOverwrites.edit(user.id, { SendMessages: false });
-                // 2. Send the Main Menu
+                // 2. Send welcome/reminder message
+                await channel.send('Thanks for contacting support, we will be with you soon! 😊\n\n💳 **Reminder:** We accept **PayPal**, **crypto**, **gift cards**, **Robux**, **V-Bucks**, and more!');
+                // 3. Send the Main Menu
                 await sendMainMenu(channel, user);
             }
         }, 1500);
