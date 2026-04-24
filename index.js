@@ -9,6 +9,10 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const express = require('express');
 
+// In-memory store for download links, keyed by message ID.
+// Populated when /upload posts a release; read when the Download button is clicked.
+const downloadLinks = new Map();
+
 const app = express();
 app.use(express.json());
 app.get('/', (req, res) => res.send('Bot is running!'));
@@ -625,7 +629,6 @@ client.on('interactionCreate', async interaction => {
                 .setDescription(proOnly
                     ? '🔒 **Pro Only** — This release is exclusive to KaHack Pro members.'
                     : '🌐 **Public Release** — Available to everyone.')
-                .addFields({ name: '🔗 Download Link', value: link })
                 .setColor(proOnly ? '#7850ff' : '#00ff88')
                 .setTimestamp();
 
@@ -637,7 +640,8 @@ client.on('interactionCreate', async interaction => {
             );
 
             try {
-                await downloadsChannel.send({ embeds: [embed], components: [row] });
+                const sentMsg = await downloadsChannel.send({ embeds: [embed], components: [row] });
+                downloadLinks.set(sentMsg.id, link);
                 return interaction.reply({ content: `✅ Version **${version}** posted to <#${downloadsChannel.id}>.`, ephemeral: true });
             } catch (err) {
                 console.error('Error handling /upload:', err);
@@ -666,13 +670,17 @@ client.on('interactionCreate', async interaction => {
                     });
                 }
             }
-            const msgEmbed = interaction.message.embeds[0];
-            const linkField = msgEmbed?.fields?.find(f => f.name === '🔗 Download Link');
-            const downloadLink = linkField?.value;
+            const downloadLink = downloadLinks.get(interaction.message.id);
             if (!downloadLink) {
                 return interaction.reply({ content: 'Could not retrieve the download link.', ephemeral: true });
             }
-            return interaction.reply({ content: `✅ Here is your download link: ${downloadLink}`, ephemeral: true });
+            const linkRow = new ActionRowBuilder().addComponents(
+                new ButtonBuilder()
+                    .setLabel('⬇️ Download')
+                    .setStyle(ButtonStyle.Link)
+                    .setURL(downloadLink)
+            );
+            return interaction.reply({ content: '✅ Click the button below to download:', components: [linkRow], ephemeral: true });
         }
 
         // --- TRIAL FLOW ---
