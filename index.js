@@ -384,6 +384,30 @@ async function registerSlashCommands() {
             {
                 name: 'unlock',
                 description: 'Unlock the current ticket channel'
+            },
+            {
+                name: 'upload',
+                description: 'Post a new KaHack version to the downloads channel',
+                options: [
+                    {
+                        name: 'link',
+                        description: 'iCloud shortcut download link',
+                        type: ApplicationCommandOptionType.String,
+                        required: true
+                    },
+                    {
+                        name: 'version',
+                        description: 'Version name (e.g. v1.2.3)',
+                        type: ApplicationCommandOptionType.String,
+                        required: true
+                    },
+                    {
+                        name: 'pro_only',
+                        description: 'Restrict download to Pro role members only',
+                        type: ApplicationCommandOptionType.Boolean,
+                        required: true
+                    }
+                ]
             }
         ];
 
@@ -566,6 +590,54 @@ client.on('interactionCreate', async interaction => {
                 return interaction.reply({ content: 'Failed to unlock the chat.', ephemeral: true });
             }
         }
+
+        if (interaction.commandName === 'upload') {
+            if (!interaction.inGuild()) {
+                return interaction.reply({ content: 'This command can only be used in a server.', ephemeral: true });
+            }
+            if (!authorizedAdmins.has(interaction.user.id)) {
+                return interaction.reply({ content: 'You are not allowed to use this command.', ephemeral: true });
+            }
+
+            const DOWNLOADS_CHANNEL_ID = process.env.DOWNLOADS_CHANNEL_ID;
+            if (!DOWNLOADS_CHANNEL_ID) {
+                return interaction.reply({ content: 'Downloads channel is not configured (DOWNLOADS_CHANNEL_ID).', ephemeral: true });
+            }
+
+            const link    = interaction.options.getString('link', true);
+            const version = interaction.options.getString('version', true);
+            const proOnly = interaction.options.getBoolean('pro_only', true);
+
+            const downloadsChannel = interaction.guild.channels.cache.get(DOWNLOADS_CHANNEL_ID)
+                || await interaction.guild.channels.fetch(DOWNLOADS_CHANNEL_ID).catch(() => null);
+            if (!downloadsChannel) {
+                return interaction.reply({ content: 'Downloads channel not found.', ephemeral: true });
+            }
+
+            const embed = new EmbedBuilder()
+                .setTitle(`📦 KaHack ${version}`)
+                .setDescription(proOnly
+                    ? '🔒 **Pro Only** — This release is exclusive to KaHack Pro members.'
+                    : '🌐 **Public Release** — Available to everyone.')
+                .addFields({ name: '🔗 Download Link', value: link })
+                .setColor(proOnly ? '#7850ff' : '#00ff88')
+                .setTimestamp();
+
+            const row = new ActionRowBuilder().addComponents(
+                new ButtonBuilder()
+                    .setCustomId(`dlbtn_${proOnly ? '1' : '0'}`)
+                    .setLabel('⬇️ Download')
+                    .setStyle(ButtonStyle.Primary)
+            );
+
+            try {
+                await downloadsChannel.send({ embeds: [embed], components: [row] });
+                return interaction.reply({ content: `✅ Version **${version}** posted to <#${DOWNLOADS_CHANNEL_ID}>.`, ephemeral: true });
+            } catch (err) {
+                console.error('Error handling /upload:', err);
+                return interaction.reply({ content: 'Failed to post the release.', ephemeral: true });
+            }
+        }
     }
 
     if (interaction.isButton()) {
@@ -574,6 +646,27 @@ client.on('interactionCreate', async interaction => {
         // Only allow the ticket owner to click the buttons
         if (userId && interaction.user.id !== userId) {
             return interaction.reply({ content: 'These buttons are not for you.', ephemeral: true });
+        }
+
+        // --- DOWNLOAD BUTTON ---
+        if (action === 'dlbtn') {
+            const proOnly = type === '1';
+            if (proOnly) {
+                const member = await resolveGuildMember(interaction);
+                if (!hasGrantedAccess(member)) {
+                    return interaction.reply({
+                        content: '🔒 This download is **Pro Only**. You need KaHack Pro to access this release.',
+                        ephemeral: true
+                    });
+                }
+            }
+            const msgEmbed = interaction.message.embeds[0];
+            const linkField = msgEmbed?.fields?.find(f => f.name === '🔗 Download Link');
+            const downloadLink = linkField?.value;
+            if (!downloadLink) {
+                return interaction.reply({ content: 'Could not retrieve the download link.', ephemeral: true });
+            }
+            return interaction.reply({ content: `✅ Here is your download link: ${downloadLink}`, ephemeral: true });
         }
 
         // --- TRIAL FLOW ---
