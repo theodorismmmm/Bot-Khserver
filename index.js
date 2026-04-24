@@ -595,10 +595,6 @@ client.on('interactionCreate', async interaction => {
             if (!interaction.inGuild()) {
                 return interaction.reply({ content: 'This command can only be used in a server.', ephemeral: true });
             }
-            if (!authorizedAdmins.has(interaction.user.id)) {
-                return interaction.reply({ content: 'You are not allowed to use this command.', ephemeral: true });
-            }
-
             const DOWNLOADS_CHANNEL_ID = process.env.DOWNLOADS_CHANNEL_ID;
             if (!DOWNLOADS_CHANNEL_ID) {
                 return interaction.reply({ content: 'Downloads channel is not configured (DOWNLOADS_CHANNEL_ID).', ephemeral: true });
