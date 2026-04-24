@@ -342,10 +342,6 @@ async function registerSlashCommands() {
     try {
         const commandDefinitions = [
             {
-                name: 'pay',
-                description: 'Restart the payment bot flow in this ticket'
-            },
-            {
                 name: 'grant',
                 description: 'Grant admin permissions to a user',
                 options: [
@@ -413,11 +409,9 @@ client.on('channelCreate', async (channel) => {
             const user = members.first();
 
             if (user) {
-                // 1. Lock the channel so the user cannot type yet
-                await channel.permissionOverwrites.edit(user.id, { SendMessages: false });
-                // 2. Send welcome/reminder message
+                // Send welcome/reminder message
                 await channel.send('Thanks for contacting support, we will be with you soon! 😊\n\n💳 **Reminder:** We accept **PayPal**, **crypto**, **gift cards**, **Robux**, **V-Bucks**, and more!');
-                // 3. Send the Main Menu
+                // Send the Main Menu
                 await sendMainMenu(channel, user);
             }
         }, 1500);
@@ -444,43 +438,6 @@ async function sendMainMenu(channel, user) {
 // Handle all button clicks and forms
 client.on('interactionCreate', async interaction => {
     if (interaction.isChatInputCommand()) {
-        if (interaction.commandName === 'pay') {
-            if (!interaction.channel || !interaction.channel.name.startsWith(TICKET_CHANNEL_PREFIX)) {
-                return interaction.reply({
-                    content: 'Use this command inside a ticket channel.',
-                    ephemeral: true
-                });
-            }
-
-            try {
-                await interaction.channel.permissionOverwrites.edit(interaction.user.id, { SendMessages: false });
-                await sendMainMenu(interaction.channel, interaction.user);
-                await interaction.reply({
-                    content: '✅ Bot flow restarted in this ticket.',
-                    ephemeral: true
-                });
-            } catch (err) {
-                console.error('Error handling /pay:', err);
-                const errorResponse = { content: 'Failed to restart the bot flow.', ephemeral: true };
-                if (interaction.deferred || interaction.replied) {
-                    await interaction.followUp(errorResponse).catch((followUpErr) => {
-                        console.error('Failed to send /pay follow-up error response:', {
-                            originalError: err,
-                            followUpError: followUpErr
-                        });
-                    });
-                } else {
-                    await interaction.reply(errorResponse).catch((replyErr) => {
-                        console.error('Failed to send /pay error response:', {
-                            originalError: err,
-                            replyError: replyErr
-                        });
-                    });
-                }
-            }
-            return;
-        }
-
         if (interaction.commandName === 'grant') {
             if (!interaction.inGuild()) {
                 return interaction.reply({ content: 'This command can only be used in a server.', ephemeral: true });
