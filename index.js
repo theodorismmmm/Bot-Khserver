@@ -406,6 +406,12 @@ async function registerSlashCommands() {
                         description: 'Restrict download to Pro role members only',
                         type: ApplicationCommandOptionType.Boolean,
                         required: true
+                    },
+                    {
+                        name: 'channel',
+                        description: 'Channel to post the release in (defaults to current channel)',
+                        type: ApplicationCommandOptionType.Channel,
+                        required: false
                     }
                 ]
             }
@@ -595,19 +601,23 @@ client.on('interactionCreate', async interaction => {
             if (!interaction.inGuild()) {
                 return interaction.reply({ content: 'This command can only be used in a server.', ephemeral: true });
             }
-            const DOWNLOADS_CHANNEL_ID = process.env.DOWNLOADS_CHANNEL_ID;
-            if (!DOWNLOADS_CHANNEL_ID) {
-                return interaction.reply({ content: 'Downloads channel is not configured (DOWNLOADS_CHANNEL_ID).', ephemeral: true });
-            }
 
             const link    = interaction.options.getString('link', true);
             const version = interaction.options.getString('version', true);
             const proOnly = interaction.options.getBoolean('pro_only', true);
 
-            const downloadsChannel = interaction.guild.channels.cache.get(DOWNLOADS_CHANNEL_ID)
-                || await interaction.guild.channels.fetch(DOWNLOADS_CHANNEL_ID).catch(() => null);
+            // Priority: explicit channel option → current channel → DOWNLOADS_CHANNEL_ID env var
+            let downloadsChannel = interaction.options.getChannel('channel') || interaction.channel;
             if (!downloadsChannel) {
-                return interaction.reply({ content: 'Downloads channel not found.', ephemeral: true });
+                const DOWNLOADS_CHANNEL_ID = process.env.DOWNLOADS_CHANNEL_ID;
+                if (!DOWNLOADS_CHANNEL_ID) {
+                    return interaction.reply({ content: 'No target channel provided and DOWNLOADS_CHANNEL_ID is not configured.', ephemeral: true });
+                }
+                downloadsChannel = interaction.guild.channels.cache.get(DOWNLOADS_CHANNEL_ID)
+                    || await interaction.guild.channels.fetch(DOWNLOADS_CHANNEL_ID).catch(() => null);
+                if (!downloadsChannel) {
+                    return interaction.reply({ content: 'Downloads channel not found.', ephemeral: true });
+                }
             }
 
             const embed = new EmbedBuilder()
@@ -628,7 +638,7 @@ client.on('interactionCreate', async interaction => {
 
             try {
                 await downloadsChannel.send({ embeds: [embed], components: [row] });
-                return interaction.reply({ content: `✅ Version **${version}** posted to <#${DOWNLOADS_CHANNEL_ID}>.`, ephemeral: true });
+                return interaction.reply({ content: `✅ Version **${version}** posted to <#${downloadsChannel.id}>.`, ephemeral: true });
             } catch (err) {
                 console.error('Error handling /upload:', err);
                 return interaction.reply({ content: 'Failed to post the release.', ephemeral: true });
